@@ -108,7 +108,7 @@ def train(
 
     device = device
 
-    global_client_net = ClientGPT2LMModel(model_configuration)
+    global_client_net = ClientGPT2LMModel(client_model_configuration)
     global_client_net = global_client_net.to(device)
 
     global_client_net.load_weight(state_dict)
@@ -259,7 +259,10 @@ def train(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SplitLoRA Script")
     parser.add_argument(
-        "--config", required=True, help="Path to the JSON configuration file"
+        "-c",
+        "--config",
+        default="configs/example_config.json",
+        help="Path to the experiment configuration file.",
     )
     args = parser.parse_args()
 
@@ -277,17 +280,26 @@ if __name__ == "__main__":
         config=config
     )
 
-    model_configuration = GPT2Config(
+    client_model_configuration = GPT2Config(
         n_embd=768,
         n_layer=12,
         n_head=12,
-        lora_attn_dim=config["lora"]["lora_dim"],
+        lora_attn_dim=4,
         lora_attn_alpha=config["lora"]["lora_alpha"],
         lora_dropout=config["lora"]["lora_dropout"],
         split_point=config["model"]["split_point"],
     )
-    gpt_client = ClientGPT2LMModel(model_configuration)
-    gpt_server = ServerGPT2LMModel(model_configuration)
+    server_model_configuration = GPT2Config(
+        n_embd=768,
+        n_layer=12,
+        n_head=12,
+        lora_attn_dim=8,
+        lora_attn_alpha=config["lora"]["lora_alpha"],
+        lora_dropout=config["lora"]["lora_dropout"],
+        split_point=config["model"]["split_point"],
+    )
+    gpt_client = ClientGPT2LMModel(client_model_configuration)
+    gpt_server = ServerGPT2LMModel(server_model_configuration)
 
     state_dict = torch.load(config["model"]["init_checkpoint"])
     if config["model"]["init_checkpoint"] is not None:
@@ -311,7 +323,7 @@ if __name__ == "__main__":
 
     # Create client models for different clients
     for _ in range(num_clients):
-        client_model = ClientGPT2LMModel(model_configuration)
+        client_model = ClientGPT2LMModel(client_model_configuration)
         client_model.load_weight(state_dict)
         client_model = client_model.to(device=device)
         lora.mark_only_lora_as_trainable(client_model)
