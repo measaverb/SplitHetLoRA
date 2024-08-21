@@ -1,2 +1,2 @@
 # SplitHetLoRA
-Split federated learning for rank-heterogenous LoRA
+Split federated learning for rank-heterogeneous LoRA
