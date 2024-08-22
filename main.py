@@ -5,23 +5,15 @@ import math
 import os
 import time
 
-import loralib as lora
 import torch
 import wandb
 
+import loralib as lora
 from datasets import get_dataloaders
 from networks import ClientGPT2LMModel, GPT2Config, ServerGPT2LMModel
+from utils.etc import fed_avg
 from utils.experiments import AverageMeter, load_config, save_checkpoint
 from utils.optimizer import get_optimizer, get_scheduler
-
-
-def fed_avg(w):
-    w_avg = copy.deepcopy(w[0])
-    for k in w_avg.keys():
-        for i in range(1, len(w)):
-            w_avg[k] += w[i][k]
-        w_avg[k] = torch.div(w_avg[k], len(w))
-    return w_avg
 
 
 def optimizer_step(

@@ -296,3 +296,4 @@ pretrained_checkpoints/
 trained_models/
 vocab/
 loralib/
+.trunk/
