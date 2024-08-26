@@ -1,10 +1,11 @@
 import copy
 import math
 
-import loralib as lora
 import torch
 from torch import nn
 from torch.nn.parameter import Parameter
+
+import loralib as lora
 
 
 def gelu(x):
@@ -286,9 +287,7 @@ class ServerGPT2Model(nn.Module):
 
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         block = Block(config.n_ctx, config, scale=True)
-        self.h = nn.ModuleList(
-            [copy.deepcopy(block) for _ in range(self.server_layer)]
-        )
+        self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(self.server_layer)])
         self.ln_f = LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
 
         self.config = config
@@ -768,3 +767,26 @@ class GPT2LMModel(nn.Module):
 
         self.transformer.load_state_dict(state_dict, strict=False)
         self.set_tied()
+
+
+if __name__ == "__main__":
+    client_model_configuration = GPT2Config(
+        n_embd=768,
+        n_layer=12,
+        n_head=12,
+        lora_attn_dim=4,
+        lora_attn_alpha=32,
+        lora_dropout=0.1,
+        split_point=3,
+    )
+    gpt_client = ClientGPT2LMModel(client_model_configuration)
+
+    weights = gpt_client.client_transformer.h[0].state_dict()
+    for idx, layer in enumerate(gpt_client.client_transformer.h):
+        print(idx)
+        weights = layer.state_dict()
+        for key, _ in weights.items():
+            if key.endswith("lora_A"):
+                print(key)
+            if key.endswith("lora_B"):
+                print(key)
