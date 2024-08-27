@@ -12,17 +12,19 @@ def fed_avg(w):
     return w_avg
 
 
-def self_pruning_regularisation(lora_layers, gamma):
+def self_pruning_regularisation(w_client, gamma):
     reg_loss = 0
-    for layer in lora_layers:
-        current_rank = layer.A.shape[1]
-        prune_rank = int(gamma * current_rank)
-
-        A_prune_norm = torch.norm(layer.A[:, prune_rank:])
-        B_prune_norm = torch.norm(layer.B[prune_rank:, :])
-
-        reg_loss += A_prune_norm * B_prune_norm
-
+    for key, value in w_client.items():
+        if key.endswith("lora_A") or key.endswith("lora_B"):
+            if key.endswith("lora_A"):
+                current_rank = value.size()[0]
+                prune_rank = int(gamma * current_rank)
+                A_prune_norm = torch.norm(value[prune_rank:, :])
+            elif key.endswith("lora_B"):
+                current_rank = value.size()[1]
+                prune_rank = int(gamma * current_rank)
+                B_prune_norm = torch.norm(value[:, prune_rank:])
+            reg_loss += A_prune_norm * B_prune_norm
     return reg_loss
 
 
@@ -36,21 +38,18 @@ def get_client_ranks(w_locals_client):
     return client_ranks
 
 
-def pad_lora_weights(w_locals_client_lora):
-    max_rank_A = max(w["lora_A"].shape[1] for w in w_locals_client_lora)
-    max_rank_B = max(w["lora_B"].shape[0] for w in w_locals_client_lora)
-
+def pad_lora_weights(w_locals_client_lora, largest_rank=16):
     padded_weights = []
     for w in w_locals_client_lora:
         padded_w = {}
         for key, value in w.items():
             if key.endswith("lora_A"):
                 padded_w[key] = torch.nn.functional.pad(
-                    value, (0, max_rank_A - value.shape[1])
+                    value, (0, 0, 0, largest_rank - value.shape[0])
                 )
             elif key.endswith("lora_B"):
                 padded_w[key] = torch.nn.functional.pad(
-                    value, (0, 0, 0, max_rank_B - value.shape[0])
+                    value, (0, largest_rank - value.shape[1])
                 )
             else:
                 padded_w[key] = value
@@ -64,67 +63,60 @@ def slice_lora_for_clients(global_weights, client_ranks):
         client_weights = copy.deepcopy(global_weights)
         for key, value in client_weights.items():
             if key.endswith("lora_A"):
-                client_weights[key] = value[:, :rank]
-            elif key.endswith("lora_B"):
                 client_weights[key] = value[:rank, :]
+            elif key.endswith("lora_B"):
+                client_weights[key] = value[:, :rank]
         sliced_weights.append(client_weights)
     return sliced_weights
 
 
-def aggregate(
-    w_locals_client,
-    global_client_weight,
-):
-    w_locals_client_lora = []
-    client_norms = []
+def aggregate(w_local_clients, num_layers=3, largest_rank=16):
+    aggregated_client_lora = {}
 
-    # Collect LoRA weights and calculate norms
-    for w_client in w_locals_client:
-        client_temp_dict = {}
-        client_norm = 0
-        for key, value in w_client.items():
-            if key.endswith("lora_A") or key.endswith("lora_B"):
-                client_temp_dict[key] = value
-                if key.endswith("lora_A"):
-                    A = value
-                elif key.endswith("lora_B"):
-                    B = value
-                    # Calculate norm for this LoRA pair
-                    client_norm += torch.norm(A @ B).item()
-        w_locals_client_lora.append(client_temp_dict)
-        client_norms.append(client_norm)
+    for layer in range(num_layers):
+        w_locals_layer_lora = []
+        layer_norms = []
 
-    # Pad LoRA weights
-    padded_w_locals_client_lora = pad_lora_weights(w_locals_client_lora)
+        for w_client in w_local_clients:
+            layer_temp_dict = {}
+            layer_norm = 0
+            for key, value in w_client.items():
+                if key.startswith(f"h.{layer}.") and (
+                    key.endswith("lora_A") or key.endswith("lora_B")
+                ):
+                    layer_temp_dict[key] = value
+                    if key.endswith("lora_A"):
+                        A = value
+                    elif key.endswith("lora_B"):
+                        B = value
+                        layer_norm += torch.norm(A @ B).item()
+            if layer_temp_dict:
+                w_locals_layer_lora.append(layer_temp_dict)
+                layer_norms.append(layer_norm)
 
-    # Calculate sparsity weights
-    total_norm = sum(client_norms)
-    client_weights = [norm / total_norm for norm in client_norms]
+        if not w_locals_layer_lora:
+            continue
 
-    # Sparsity-weighted aggregation
-    w_glob_client_lora = {}
-    for idx, w_client in enumerate(padded_w_locals_client_lora):
-        for key, value in w_client.items():
-            if key in w_glob_client_lora:
-                w_glob_client_lora[key] += client_weights[idx] * value
-            else:
-                w_glob_client_lora[key] = client_weights[idx] * value
+        padded_w_locals_layer_lora = pad_lora_weights(w_locals_layer_lora, largest_rank)
 
-    # Prepare global weights
-    w_glob_client_lora_new = {}
-    for key, value in w_glob_client_lora.items():
-        new_key = "client_transformer." + key
-        w_glob_client_lora_new[new_key] = value
+        total_layer_norm = sum(layer_norms)
+        layer_weights = (
+            [norm / total_layer_norm for norm in layer_norms]
+            if total_layer_norm != 0
+            else [1.0 / len(layer_norms)] * len(layer_norms)
+        )
 
-    # Update global weights
-    for key, _ in global_client_weight.items():
-        if key.endswith("lora_A") or key.endswith("lora_B"):
-            global_client_weight[key] = w_glob_client_lora_new[key]
+        for idx, w_client_layer in enumerate(padded_w_locals_layer_lora):
+            for key, value in w_client_layer.items():
+                if key in aggregated_client_lora:
+                    aggregated_client_lora[key] += layer_weights[idx] * value
+                else:
+                    aggregated_client_lora[key] = layer_weights[idx] * value
 
-    # Get client ranks
-    client_ranks = get_client_ranks(w_locals_client)
+    return aggregated_client_lora
 
-    # Slice LoRA matrices for each client based on their rank
-    sliced_client_weights = slice_lora_for_clients(global_client_weight, client_ranks)
 
-    return sliced_client_weights, global_client_weight
+def distribute(w_local_clients, aggregated_client_lora):
+    client_ranks = get_client_ranks(w_local_clients)
+    sliced_client_weights = slice_lora_for_clients(aggregated_client_lora, client_ranks)
+    return sliced_client_weights
