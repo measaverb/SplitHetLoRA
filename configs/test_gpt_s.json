@@ -11,7 +11,7 @@
     "init_checkpoint": "./trained_models/train-splitlora-gpt2sm-rank8/model_sfl.600_r=8_c=3_num=3_block=3.pt"
   },
   "lora": {
-    "lora_dim": 8,
+    "lora_dim": 16,
     "lora_alpha": 32
   },
   "training": {
