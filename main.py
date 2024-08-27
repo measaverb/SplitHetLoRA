@@ -11,13 +11,14 @@ import wandb
 import loralib as lora
 from datasets import get_dataloaders
 from networks import ClientGPT2LMModel, GPT2Config, ServerGPT2LMModel
-from utils.etc import fed_avg
+from utils.etc import aggregate, distribute, self_pruning_regularisation
 from utils.experiments import AverageMeter, load_config, save_checkpoint
 from utils.optimizer import get_optimizer, get_scheduler
 
 
 def optimizer_step(
     _loss,
+    _reg,
     server_optimizer,
     server_model,
     client_optimizer,
@@ -26,7 +27,8 @@ def optimizer_step(
     hidden_states,
     is_update=True,
 ):
-    _loss.backward()
+    _total_loss = _loss + _reg
+    _total_loss.backward()
 
     dfx_client = client_hidden_states.grad.clone().detach()
 
@@ -93,6 +95,7 @@ def train(
     server_model.train()
 
     avg_lm_loss = AverageMeter()
+    avg_sp_reg = AverageMeter()
     print("Training Start", epoch)
     log_start_time = time.time()
 
@@ -109,7 +112,7 @@ def train(
     global_client_weight = global_client_net.state_dict()
 
     aggregate_step = 100
-    w_locals_client = []
+    w_local_clients = []
 
     for idx, data in enumerate(zip(train_dl_c0, train_dl_c1, train_dl_c2)):
         for i in range(num_clients):
@@ -124,10 +127,14 @@ def train(
             _input = _input.to(device)
 
             hidden_states, presents, w_client = client_models[i](_input)
+            _sp_reg = self_pruning_regularisation(
+                w_client=w_client, gamma=config["training"]["gamma_sp_reg"]
+            )
+
             train_step += 1
 
             if (train_step + num_clients) % aggregate_step <= num_clients:
-                w_locals_client.append(copy.deepcopy(w_client))
+                w_local_clients.append(copy.deepcopy(w_client))
 
             client_hidden_states = hidden_states.clone().detach().requires_grad_(True)
 
@@ -144,9 +151,11 @@ def train(
 
             is_update = train_step % config["training"]["grad_acc"] == 0
             avg_lm_loss.update(_lm_loss.item())
+            avg_sp_reg.update(_sp_reg.item())
 
             optimizer_step(
                 _lm_loss / config["training"]["grad_acc"],
+                _sp_reg * config["training"]["lambda_sp_reg"],
                 server_optimizer,
                 server_model,
                 optimizers[i],
@@ -157,19 +166,14 @@ def train(
             )
 
             if train_step % aggregate_step == 0:
-                temp_dict = {}
-                w_locals_client_lora = []
-                for w_client in w_locals_client:
-                    for key, value in w_client.items():
-                        if key.endswith("lora_A"):
-                            temp_dict[key] = value
-                        if key.endswith("lora_B"):
-                            temp_dict[key] = value
-                    w_locals_client_lora.append(copy.deepcopy(temp_dict))
-                w_glob_client_lora = fed_avg(w_locals_client_lora)
+                aggregated_client_lora = aggregate(
+                    w_local_clients=w_local_clients,
+                    num_layers=config["model"]["split_point"],
+                    largest_rank=config["lora"]["global_client_lora_dim"],
+                )
 
                 w_glob_client_lora_new = {}
-                for key, value in w_glob_client_lora.items():
+                for key, value in aggregated_client_lora.items():
                     new_key = "client_transformer." + key
                     w_glob_client_lora_new[new_key] = value
                 for key, _ in global_client_weight.items():
@@ -179,10 +183,15 @@ def train(
                         global_client_weight[key] = w_glob_client_lora_new[key]
 
                 global_client_net.load_state_dict(global_client_weight)
-                for client_model_ in client_models:
-                    client_model_.load_state_dict(global_client_weight)
 
-                w_locals_client = []
+                sliced_client_weights = distribute(
+                    w_local_clients=w_local_clients,
+                    aggregated_client_lora=aggregated_client_lora,
+                )
+                for idx, client_model_ in enumerate(client_models):
+                    client_model_.load_state_dict(sliced_client_weights[idx])
+
+                w_local_clients = []
 
             if train_step % config["training"]["log_interval"] == 0:
                 elapsed = time.time() - log_start_time
@@ -191,6 +200,7 @@ def train(
                     f"| epoch {epoch:3d} step {train_step:>8d} | {idx*3 + 1:>6d} batches | "
                     f"lr {lr:.3g} | ms/batch {elapsed * 1000 / config['training']['log_interval']:5.2f} | "
                     f"loss {avg_lm_loss.val:5.2f} | avg loss {avg_lm_loss.avg:5.2f} | "
+                    f"sp reg term {avg_sp_reg.val:5.2f} | avg sp reg term {avg_sp_reg.avg:5.2f} | "
                     f"ppl {math.exp(avg_lm_loss.avg):5.2f}"
                 )
                 print(log_str)
@@ -198,8 +208,9 @@ def train(
                     wandb.log(
                         {
                             "train/step/train_loss": avg_lm_loss.val,
-                            "train/step/lr": lr,
+                            "train/step/train_sp_reg": avg_sp_reg.val,
                             "train/step/ppl": math.exp(avg_lm_loss.val),
+                            "train/step/lr": lr,
                         },
                         step=train_step,
                     )
@@ -260,7 +271,7 @@ if __name__ == "__main__":
 
     config = load_config(args.config)
     if config["wandb"]["logging"]:
-        wandb.init(project="splitlora-experiments", name=config["wandb"]["run_name"])
+        wandb.init(project="splithetlora-experiments", name=config["wandb"]["run_name"])
 
     torch.manual_seed(config["distributed"]["random_seed"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -276,7 +287,7 @@ if __name__ == "__main__":
         n_embd=768,
         n_layer=12,
         n_head=12,
-        lora_attn_dim=4,
+        lora_attn_dim=config["lora"]["global_client_lora_dim"],
         lora_attn_alpha=config["lora"]["lora_alpha"],
         lora_dropout=config["lora"]["lora_dropout"],
         split_point=config["model"]["split_point"],
@@ -285,7 +296,7 @@ if __name__ == "__main__":
         n_embd=768,
         n_layer=12,
         n_head=12,
-        lora_attn_dim=8,
+        lora_attn_dim=config["lora"]["server_lora_dim"],
         lora_attn_alpha=config["lora"]["lora_alpha"],
         lora_dropout=config["lora"]["lora_dropout"],
         split_point=config["model"]["split_point"],
@@ -314,7 +325,10 @@ if __name__ == "__main__":
     optimizers = []
 
     # Create client models for different clients
-    for _ in range(num_clients):
+    for i in range(num_clients):
+        client_model_configuration.lora_attn_dim = int(
+            config["lora"]["local_clients_lora_dim"][i]
+        )
         client_model = ClientGPT2LMModel(client_model_configuration)
         client_model.load_weight(state_dict)
         client_model = client_model.to(device=device)
