@@ -774,7 +774,7 @@ if __name__ == "__main__":
         n_embd=768,
         n_layer=12,
         n_head=12,
-        lora_attn_dim=4,
+        lora_attn_dim=8,
         lora_attn_alpha=32,
         lora_dropout=0.1,
         split_point=3,
@@ -785,8 +785,8 @@ if __name__ == "__main__":
     for idx, layer in enumerate(gpt_client.client_transformer.h):
         print(idx)
         weights = layer.state_dict()
-        for key, _ in weights.items():
+        for key, value in weights.items():
             if key.endswith("lora_A"):
-                print(key)
+                print(value.size())
             if key.endswith("lora_B"):
-                print(key)
+                print(value.size())
