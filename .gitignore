@@ -297,3 +297,4 @@ trained_models/
 vocab/
 loralib/
 .trunk/
+wandb
