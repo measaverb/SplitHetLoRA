@@ -6,9 +6,9 @@ import os
 import time
 
 import torch
-import wandb
 
 import loralib as lora
+import wandb
 from datasets import get_dataloaders
 from networks import ClientGPT2LMModel, GPT2Config, ServerGPT2LMModel
 from utils.etc import aggregate, distribute, self_pruning_regularisation
@@ -103,10 +103,9 @@ def train(
 
     device = device
 
-    global_client_net = ClientGPT2LMModel(client_model_configuration)
+    global_client_net = client_model
     global_client_net = global_client_net.to(device)
 
-    global_client_net.load_weight(state_dict)
     lora.mark_only_lora_as_trainable(global_client_net)
     global_client_net.train()
     global_client_weight = global_client_net.state_dict()
@@ -274,9 +273,6 @@ if __name__ == "__main__":
             project="splithetlora-experiments",
             name=config["wandb"]["run_name"],
         )
-        artifact = wandb.Artifact(name="configuration", type="metadata")
-        artifact.add_file(local_path=args.config, name="configuration_file")
-        artifact.save()
         if config["wandb"]["save_code"]:
             wandb.run.log_code(".")
 
