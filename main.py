@@ -132,7 +132,6 @@ def train(
             )
 
             train_step += 1
-
             if (train_step + num_clients) % aggregate_step <= num_clients:
                 w_local_clients.append(copy.deepcopy(w_client))
 
@@ -169,7 +168,7 @@ def train(
                 aggregated_client_lora = aggregate(
                     w_local_clients=w_local_clients,
                     num_layers=config["model"]["split_point"],
-                    largest_rank=config["lora"]["global_client_lora_dim"],
+                    global_client_rank=config["lora"]["global_client_lora_dim"],
                 )
 
                 w_glob_client_lora_new = {}
@@ -185,12 +184,12 @@ def train(
                 global_client_net.load_state_dict(global_client_weight)
 
                 sliced_client_weights = distribute(
-                    w_local_clients=w_local_clients,
+                    global_client_weight=global_client_weight,
+                    client_models=client_models,
                     aggregated_client_lora=aggregated_client_lora,
                 )
-                for idx, client_model_ in enumerate(client_models):
-                    client_model_.load_state_dict(sliced_client_weights[idx])
-
+                for c_idx, client_model_ in enumerate(client_models):
+                    client_model_.load_state_dict(sliced_client_weights[c_idx])
                 w_local_clients = []
 
             if train_step % config["training"]["log_interval"] == 0:
@@ -271,7 +270,15 @@ if __name__ == "__main__":
 
     config = load_config(args.config)
     if config["wandb"]["logging"]:
-        wandb.init(project="splithetlora-experiments", name=config["wandb"]["run_name"])
+        wandb.init(
+            project="splithetlora-experiments",
+            name=config["wandb"]["run_name"],
+        )
+        artifact = wandb.Artifact(name="configuration", type="metadata")
+        artifact.add_file(local_path=args.config, name="configuration_file")
+        artifact.save()
+        if config["wandb"]["save_code"]:
+            wandb.run.log_code(".")
 
     torch.manual_seed(config["distributed"]["random_seed"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -329,6 +336,7 @@ if __name__ == "__main__":
         client_model_configuration.lora_attn_dim = int(
             config["lora"]["local_clients_lora_dim"][i]
         )
+        state_dict = torch.load(config["model"]["init_checkpoint"])
         client_model = ClientGPT2LMModel(client_model_configuration)
         client_model.load_weight(state_dict)
         client_model = client_model.to(device=device)
