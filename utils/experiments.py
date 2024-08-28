@@ -54,7 +54,7 @@ def save_checkpoint(config, w_glob_client, model_server, train_step, num_clients
 
     model_path = os.path.join(
         config["training"]["work_dir"],
-        f'model_sfl.{train_step}_r={config["lora"]["lora_dim"]}_c={config["model"]["split_point"]}_num={num_clients}_block=3.pt',
+        f'model_sfl.{train_step}_r={config["lora"]["global_client_lora_dim"]}_c={config["model"]["split_point"]}_num={num_clients}.pt',
     )
     print("Saving checkpoint to ", model_path)
     torch.save({"model_state_dict": model_state_dict}, model_path)
