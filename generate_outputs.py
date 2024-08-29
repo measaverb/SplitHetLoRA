@@ -277,7 +277,7 @@ def load_config(config_file):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SplitLoRA Script")
     parser.add_argument(
-        "--config", required=True, help="Path to the JSON configuration file"
+        "-c", "--config", required=True, help="Path to the JSON configuration file"
     )
     args = parser.parse_args()
 
