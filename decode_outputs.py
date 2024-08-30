@@ -11,18 +11,10 @@ import encoder
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--vocab", type=str, default=None, help="vocab path")
+parser.add_argument("--vocab", type=str, default="vocab/", help="vocab path")
 
 parser.add_argument("--sample_file", default=None, type=str, help="ft sample file")
-parser.add_argument("--input_file", default=None, type=str, help="ft input file")
-
-parser.add_argument(
-    "--output_ref_file", default=None, type=str, help="output reference file"
-)
-parser.add_argument(
-    "--output_pred_file", default=None, type=str, help="output predicion file"
-)
-
+parser.add_argument("--input_file", default="data/e2e/test_formatted.jsonl", type=str, help="ft input file")
 parser.add_argument(
     "--ref_unique_file", default=None, type=str, help="reference unique id file"
 )
