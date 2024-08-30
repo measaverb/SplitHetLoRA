@@ -12,10 +12,9 @@ def fed_avg(w):
     return w_avg
 
 
-def self_pruning_regularisation(w_client, gamma):
+def self_pruning_regularisation(client_model, gamma):
     reg_loss = 0
-    A_prune_norm, B_prune_norm = None, None
-    for key, value in w_client.items():
+    for key, value in client_model.named_parameters():
         if key.endswith("lora_A") or key.endswith("lora_B"):
             if key.endswith("lora_A"):
                 current_rank = value.size()[0]

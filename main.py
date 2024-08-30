@@ -127,7 +127,7 @@ def train(
 
             hidden_states, presents, w_client = client_models[i](_input)
             _sp_reg = self_pruning_regularisation(
-                w_client=w_client, gamma=config["training"]["gamma_sp_reg"]
+                client_model=client_models[i].client_transformer, gamma=config["training"]["gamma_sp_reg"]
             )
 
             train_step += 1
